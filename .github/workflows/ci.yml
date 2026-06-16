@@ -74,6 +74,17 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            goarch: amd64
+            cc: gcc
+            apt_packages: "gcc libc6-dev"
+          - arch: arm64
+            goarch: arm64
+            cc: aarch64-linux-gnu-gcc
+            apt_packages: "gcc-aarch64-linux-gnu libc6-dev-arm64-cross"
 
     steps:
       - uses: actions/checkout@v4
@@ -84,7 +95,7 @@ jobs:
           go-version: "1.22"
 
       - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y gcc libc6-dev
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt_packages }}
 
       - name: Download modules
         run: go mod download
@@ -93,7 +104,8 @@ jobs:
         env:
           CGO_ENABLED: "1"
           GOOS: linux
-          GOARCH: amd64
+          GOARCH: ${{ matrix.goarch }}
+          CC: ${{ matrix.cc }}
         run: go build -o bloc-manager ./cmd/manager
 
       - name: Install nfpm
@@ -106,12 +118,13 @@ jobs:
         env:
           VERSION: ${{ github.ref_name }}
         run: |
-          nfpm package --packager deb --target bloc-manager_${{ github.ref_name }}_amd64.deb
-          nfpm package --packager rpm --target bloc-manager_${{ github.ref_name }}_amd64.rpm
+          sed 's/arch: amd64/arch: ${{ matrix.arch }}/' nfpm.yaml > nfpm-build.yaml
+          nfpm package --config nfpm-build.yaml --packager deb --target bloc-manager_${{ github.ref_name }}_${{ matrix.arch }}.deb
+          nfpm package --config nfpm-build.yaml --packager rpm --target bloc-manager_${{ github.ref_name }}_${{ matrix.arch }}.rpm
 
-      - name: Create release
+      - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            bloc-manager_${{ github.ref_name }}_amd64.deb
-            bloc-manager_${{ github.ref_name }}_amd64.rpm
+            bloc-manager_${{ github.ref_name }}_${{ matrix.arch }}.deb
+            bloc-manager_${{ github.ref_name }}_${{ matrix.arch }}.rpm
