@@ -198,14 +198,33 @@ func (h *Handler) createVolume(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Step 3: bring DRBD up on all nodes.
+	// Step 3: bring DRBD up on all nodes; roll back already-up nodes on failure.
+	var upNodes []string
 	for _, nodeName := range req.Nodes {
-		client, _ := h.clientFor(nodeName) // already validated above
+		client, _ := h.clientFor(nodeName)
 		if err := client.DRBDUp(ctx, req.Name); err != nil {
 			h.log.Error("drbd up", "node", nodeName, "err", err)
+			// Roll back: bring down nodes that succeeded.
+			for _, upNode := range upNodes {
+				c, _ := h.clientFor(upNode)
+				if rerr := c.DRBDDown(ctx, req.Name); rerr != nil {
+					h.log.Warn("rollback drbd down", "node", upNode, "err", rerr)
+				}
+			}
+			// Clean up res files and LVs on all nodes.
+			for _, n := range req.Nodes {
+				c, _ := h.clientFor(n)
+				if rerr := c.RemoveRes(ctx, req.Name); rerr != nil {
+					h.log.Warn("rollback remove res", "node", n, "err", rerr)
+				}
+				if rerr := c.RemoveLV(ctx, h.vg, lvName); rerr != nil {
+					h.log.Warn("rollback remove lv", "node", n, "err", rerr)
+				}
+			}
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("drbd up on %s: %v", nodeName, err))
 			return
 		}
+		upNodes = append(upNodes, nodeName)
 	}
 
 	// Step 4: wait briefly for DRBD to settle.
