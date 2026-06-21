@@ -529,10 +529,13 @@ func (h *Handler) publishVolume(w http.ResponseWriter, r *http.Request, id strin
 			continue
 		}
 		h.log.Info("demoting volume on other host before promoting", "volume", v.Name, "otherHost", nodeHost)
-		// Stop NBD if applicable.
-		if strings.HasPrefix(v.AttachedDevice, "nbd:") {
-			port := nbdPortFromDevice(v.AttachedDevice)
-			_ = otherClient.NBDStop(ctx, port)
+		// Stop NBD if applicable. Always derive the port from v.Minor to clean up stale qemu-nbd servers,
+		// since v.AttachedDevice is cleared on a previous unpublish call.
+		port := 10000 + v.Minor
+		if err := otherClient.NBDStop(ctx, port); err != nil {
+			h.log.Warn("failed to stop NBD on other host", "volume", v.Name, "otherHost", nodeHost, "port", port, "err", err)
+		} else {
+			h.log.Info("stopped NBD on other host", "volume", v.Name, "otherHost", nodeHost, "port", port)
 		}
 		// Demote DRBD to Secondary.
 		if err := otherClient.DRBDSecondary(ctx, v.Name); err != nil {
